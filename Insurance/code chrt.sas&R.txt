@@ -1,0 +1,712 @@
+
+**************************************************************
+Code SAS                                                      *
+**************************************************************
+********PART 1: importation de base de données(Production)*****;
+/*create a library*/
+libname chrt '/home/u60621746/exam_assurance';
+******** production********;
+/*1-importation de données*/
+
+datafile='/home/u60621746/exam_assurance/production.xlsx' dbms=xlsx 
+out=chrt.production replace;
+getnames=yes;
+
+/*Afficher les variables*/
+PROC CONTENTS DATA=chrt.production OUT=variables;
+RUN;
+***********************************;
+/*2-Edition les nomes de variables*/
+data chrt.production;
+	rename DOB=date_de_naissance
+       DMC=date_de_mise_en_circulation
+		PF=Puissance_Fiscale;
+set chrt.production;
+run;  
+       
+/*4- Verification de la presence de valeurs manquantes */
+proc means data=chrt.production nmiss;
+output out=chrt.tableau_nmiss nmiss=;
+run;
+
+/*5- Afficher les résultats dans un tableau */
+proc print data=chrt.tableau_nmiss noobs;
+var _all_;
+title 'Tableau des valeurs manquantes';
+run;
+
+proc print data=chrt.production (obs=3);
+run;
+/*4- Vérification de la présence de valeurs manquantes */
+proc means data=chrt.production nmiss stackodsoutput;
+   ods output summary=missings;
+run;
+
+/*5- Afficher les résultats dans un tableau */
+proc print data=chrt.tableau_nmiss noobs;
+var _all_;
+title 'Tableau des valeurs manquantes';
+run;
+/* 6 -supression*/
+data chrt.Production;
+	set chrt.production;
+	if date_de_mise_en_circulation=. or date_de_mise_en_circulation<=0 then
+		delete;
+	if date_de_naissance=.  then
+		delete;
+
+	if numepolice = . then
+		delete;
+	if exercice =. then 
+	delete;
+	if exposition=. then
+
+		delete;	
+run;
+/*7- affichage des variables  */
+PROC CONTENTS DATA=chrt.production; 
+RUN;
+
+
+
+/*8- ajouter des nouvelles variables  */
+data chrt.Production;
+	set chrt.Production;
+	age_du_conducteur = intck("year", date_de_naissance,mdy(1,1,exercice));
+	age_mise_en_circulation = intck("year", date_de_mise_en_circulation,mdy(1,1,exercice));
+run;
+
+/* *8-1)Test s'il existe un individu d'age <18(>100); */
+PROC means DATA=chrt.production;
+ var age_du_conducteur ;
+RUN;
+***********************************************;
+* on constate qu'il n y a pas d'age < à 18 (>100)   *;
+***********************************************;
+*8-2) detection des doublants;
+proc sql;
+create table chrt.dub as 
+select *, count(*) as dubs
+from chrt.Production
+group by numepolice, exercice
+order by dubs DESC;
+quit;
+proc means data=chrt.dub;
+var dubs;
+run;
+/*suppression des variables (date_de_naissance et date_de_mise_en_circulation)  */
+DATA chrt.production;
+     SET chrt.production (DROP=date_de_naissance date_de_mise_en_circulation);
+RUN;
+
+
+************************************************;
+*On constate qu'il n' y a pas des doublants    *;
+************************************************;
+*------------------------------------------------------------------;
+
+
+***PART 2 : Importation de données sinistre*****;
+/*1-importation de données  */
+
+
+proc import datafile='/home/u60621746/exam_assurance/sinistre.xlsx'   dbms=xlsx
+            out=chrt.sinistre replace;
+	        getnames=yes;
+	       
+run;
+
+
+/*2- affichage des données 	  */
+	 
+proc print data=chrt.sinistre (obs=3);
+run;	 
+*********Nettoyage******************;	 
+/*1- supprimer la premiere colone */
+	 DATA chrt.sinistre;
+     SET chrt.sinistre (DROP=var1);
+RUN;
+
+/*2-verification de la presence des valeurs manquantes  */
+proc means data=chrt.sinistre nmiss;
+output out=chrt.tab_nmiss nmiss=;
+run;
+**********************************;
+*Pas des valeurs manquantes      *;
+**********************************;
+/*3- verification sur les variables  */
+data chrt.sinistre;
+set chrt.sinistre;
+if numepolice=. or numepolice<=0 then
+delete;
+if annee_reference=. or annee_reference<=0 then
+delete;
+
+if n_sinistre=. or n_sinistre<=0 then
+ delete;
+if montantsinistre=. or montantsinistre<=0 then
+ delete;
+run;
+/*4-affichage des variables après nettoyage  */
+proc contents data= chrt.sinistre;
+run;
+/* 5- detection des doublants */
+proc sql;
+create table chrt.dubb as 
+select *, count(*) as dubbs
+from chrt.sinistre
+group by numepolice, annee_reference
+order by dubbs DESC;
+quit;
+proc means data=chrt.dubb;
+var dubbs;
+run;
+**************************************************************************;
+* Puisque 'Maximum = 6', on en déduit qu'ils existent des lignes doublées*;
+**************************************************************************;
+/*6-suppression des doublants */
+
+
+* le nombre de lignes;
+proc sql;
+   select count(*) as nrows
+   from chrt.sinistre;
+quit;
+**************************;
+*avant on a nrows=65536, *;
+*nrows=61235             *;
+**************************;
+
+
+
+*/1-calculer le nombre de sinistres par contrat/;
+proc sql; 
+	create table chrt.sinistres as 
+	select numepolice ,annee_reference, count(*) as nbr_sinistre , sum(montantsinistre) as totalmontant
+	from chrt.sinistre 
+	group by annee_reference, numepolice;
+quit;
+
+/*3- fussioner les deux base de données(production et sinistres)  */
+
+proc sql;
+   create table chrt.Prod_Sin as
+   select p.*, s.nbr_sinistre, s.totalmontant 
+   from  chrt.production as p
+   left join chrt.sinistres as s
+   on p.numepolice= s.numepolice 
+      and s.annee_reference=p.exercice;
+quit;
+DATA chrt.Prod_Sin;
+     SET chrt.Prod_Sin (DROP= annee_reference montantsinistre );
+RUN;
+/* compter le nombre des doublants */
+proc sql;
+create table chrt.dubb as 
+select *, count(*) as dubbs
+from chrt.prod_sin
+group by numepolice, exercice
+order by dubbs DESC;
+quit;
+
+/* 4- suppression des valeurs manquantes*/
+proc means data=chrt.Prod_Sin nmiss;
+output out=chrt.table_nmiss nmiss=;
+run;
+/* data chrt.Prod_Sin; */
+/* 	set chrt.Prod_Sin; */
+/* 	if cmiss(of_all_) then  */
+/* 		delete; */
+/* run;		 */
+
+DATA chrt.Prod_Sin;
+     SET chrt.Prod_Sin (DROP= annee_reference montantsinistre );
+RUN;
+proc sql;
+update chrt.prod_sin
+set nbr_sinistre=0, totalmontant=0
+where nbr_sinistre = . and totalmontant = .;
+quit;
+/* supprimer des valeus manquantes  */
+proc sql;
+   create table chrt.prod_sin as
+   select *
+   from chrt.prod_sin
+   where not missing(age_mise_en_circulation);
+quit;
+proc contents data = chrt.prod_sin;
+run;
+/* Je constate qu'il un variable(A) qui n'a pas aucune effet a été ajouté  */
+proc sql;
+   alter table chrt.prod_sin
+   drop var1;
+quit;
+/*5- exploration de données*/
+*5-1 statistique descriptives ;
+
+proc means data= chrt.prod_sin;
+var nbr_sinistre totalmontant;
+run;
+title "Analyse de la distribution des nombres de sinistres";
+proc univariate data=chrt.prod_sin;
+   var nbr_sinistre;
+   run;
+   
+ title "Analyse de la distribution de'totalmontant'";
+proc univariate data=chrt.prod_sin;
+   var totalmontant;
+   run;  
+/*   tables de contingences  */
+   proc freq data=chrt.prod_sin noprint ;
+tables age_du_conducteur* nbr_sinistre / out=freqout;
+run;
+/* affichage de la table freqout */
+title"Calcul des fréquences croisées entre les variables age_du_conducteur et nbr_sinistre";
+proc print data=freqout (obs=10);
+run;
+
+/* Calcul des fréquences croisées entre les variables sexe et nbr_sinistre */
+proc freq data=chrt.prod_sin noprint;
+   tables sexe*nbr_sinistre / out=freqout1;
+run;
+
+/* Affichage des résultats dans une table */
+title "Tableau croisé entre la variable sexe et le nombre de sinistres";
+proc print data=freqout1;
+run;
+
+proc freq data=chrt.prod_sin noprint ;
+tables zone* nbr_sinistre / out=freqout2;
+run;
+
+title" Tableau croisé entre la variable catégorielle Zone et le nombre de sinstre";
+proc print data= freqout2 (obs=10);
+run;
+
+proc freq data=chrt.prod_sin noprint ;
+tables age_mise_en_circulation* nbr_sinistre / out=freqout3;
+run;
+
+title" Tableau croisé entre la variable age_mise_en_circulation et le nombre de sinstre";
+proc print data= freqout3 (obs=10);
+run;
+   
+   
+   
+   
+   
+/*5-2 Generer un ensembles de diagrammes en utilisant sgplot */
+** distribution de nbr_sinistre;
+
+title"Analyse de la distribution du nombre de sinistres ";
+proc univariate data=chrt.prod_sin;
+var nbr_sinistre;
+histogram ; /* Création d'un histogramme */
+ods select histogram basicstats; /* Affichage des statistiques de base et de l'histogramme */
+**-distribution de totalmontant;
+title "Graphique à barres verticales de la variable totalmontat ";
+proc univariate data=chrt.prod_sin;
+var totalmontant;
+histogram ; /* Création d'un histogramme */
+ods select histogram basicstats; /* Affichage des statistiques de base et de l'histogramme */
+
+
+
+
+* age_du_conducteur & nbr_sinistre;
+title"Diagramme à barres empilées du nombre de sinistres par age du conducteur";
+proc sgplot data=chrt.prod_sin;
+  vbar age_du_conducteur / response=nbr_sinistre stat=mean groupdisplay=stack;
+run;
+*age_mise_en_circulation & nbr_sinistre;
+title "Diagramme à barres empilées du nombre de sinistres par age de mise en circulation";
+proc sgplot data=chrt.prod_sin;
+  vbar age_mise_en_circulation / response=nbr_sinistre  groupdisplay=stack;
+run;
+**sexe & nbr_sinistre;
+title"Diagramme à barres empilées du nombre de sinistres par sexe";
+proc sgplot data=chrt.prod_sin;
+  vbar sexe / response=nbr_sinistre  groupdisplay=stack;
+run;
+** zone & nbr_sinistre;
+title "Diagramme à barres empilées du nombre de sinistres par zone";
+proc sgplot data=chrt.prod_sin;
+  vbar zone / response=nbr_sinistre  groupdisplay=stack;
+run;
+** age_du_conducteur & totalmontant;
+title "Diagramme à barres empilées du totalmontant par age du conducteur";
+proc sgplot data=chrt.prod_sin;
+  vbar age_du_conducteur / response=totalmontant stat=mean groupdisplay=stack;
+run;
+* age_mise_en_circulation & totalmontant;
+title "Diagramme à barres empilées du totalmontant par age de mise en circulation";
+proc sgplot data=chrt.prod_sin;
+  vbar age_mise_en_circulation / response=totalmontant stat=mean groupdisplay=stack;
+run;
+* sexe & totalmontant;
+title "Diagramme à barres empilées du totalmontant par sexe";
+proc sgplot data=chrt.prod_sin;
+  vbar sexe / response=totalmontant  groupdisplay=stack;
+run;
+* zone & totalmontant;
+title "Diagramme à barres empilées du totalmontant par zone";
+proc sgplot data=chrt.prod_sin;
+  vbar zone / response=totalmontant stat=mean  groupdisplay=stack;
+run;
+* puissance_fiscale & totalmontant;
+title "Diagramme à barres empilées du totalmontant par puissance fiscale";
+proc sgplot data=chrt.prod_sin;
+	vbar puissance_fiscale/ response=totalmontant stat=mean groupdisplay=stack;
+run;
+* puissance_fiscale & nbr_sinistre;
+title "Diagramme à barres empilées du nombre de sinistre par puissance fiscale";
+proc sgplot data=chrt.prod_sin;
+	vbar puissance_fiscale/ response=nbr_sinistre groupdisplay=stack;
+run;
+***********************************************************;
+*Interpretation:                                          *;
+***********************************************************;
+
+ 
+ 
+****************************************************;
+*donner une analyse sur la dependance des variables*; 
+****************************************************;
+------
+*************************;
+
+/* Creation du format d'age */
+/* creation d'une table summary de l'age du conducteur pour en déduire les classes adéquates
+ en basant sur les ages ayant meme pourcentage de presentation dans la base de donnée */
+proc freq data=chrt.prod_sin;
+tables age_du_conducteur / nocol norow nocum out =tabb;
+run;
+proc format; 
+	value ageFormat
+		18-18="[18,18]"
+		19-24="[19,24]"
+		25-30="[25,30]"
+		30-49="[30,49]"
+		50-52="[50,52]"
+		53-55="[53,55]"
+		56-57="[56,57]" ;
+run;
+
+data chrt.prod_sin_age;
+set chrt.prod_sin;
+if age_du_conducteur>=18 and age_du_conducteur<=18 then
+ageFormat="[18,18]";
+if age_du_conducteur>=19 and age_du_conducteur<=24 then
+ageFormat="[19,24]";
+if age_du_conducteur>=25 and age_du_conducteur<=30 then
+ageFormat="[25,30]";
+if age_du_conducteur>=31 and age_du_conducteur<=49 then
+ageFormat="[31,49]";
+
+if age_du_conducteur>=50 and age_du_conducteur<=52 then
+ageFormat="[50,52]";
+if age_du_conducteur>=50 and age_du_conducteur<=52 then
+ageFormat="[56,57]";
+run;
+
+
+
+/* creation de la table prod_sin_ts qui va conetenir le taux de sinistralité Notée ts  */
+proc sql;
+create table chrt.prod_sin_ts as 
+   select sexe , ageFormat, sum(nbr_sinistre*exposition)/sum(exposition) as ts
+   from chrt.prod_sin_age
+   group by ageFormat, sexe;
+ run;
+/*  affichage de la table */
+ title"Création d'une table pour le taux de sinistralité par sexe et par tranche d'âge";
+ poc print data=chrt.prod_sin_ts;
+ run;
+***********************************************************************************;
+*Le taux de sinistralité selon le sexe et l'âge est une mesure qui permet         *;
+*d'évaluer la fréquence des sinistres (accidents) pour des groupes de conducteurs *;
+*de différents sexes et tranches d'âge. Cette mesure est importante car les       *;
+*caractéristiques démographiques et les comportements de conduite diffèrent       *;
+*souvent entre les groupes d'âge et de sexe, ce qui peut influencer le risque     *;
+* d'accident. Le calcule du taux de sinistralité pondéré qui prend                *;           
+*en compte les différences dans l'exposition entre                                *;
+*les groupes d'âge et de sexe. Cela permet de comparer                            *;
+*les taux de sinistralité entre les groupes de manière plus précise et de mieux   *;
+*évaluer les risques associés à la conduite pour différents groupes de population *;
+***********************************************************************************;
+/*un graphique à nuage de points avec une ligne de tendance pour représenter
+ la relation entre l'âge du conducteur et le taux de sinistralité */
+proc sgplot data=chrt.prod_sin_ts;
+title "Taux de sinistralité vs Age du conducteur";
+scatter x =ageFormat y=ts / filledoutlinedmarkers
+    markerfillatrs=(color='darkred')
+	markeroutlineattrs=(color='black' thickness=2)
+	markerattrs=(symbol=circlefilled size =15);
+	xaxis grid label="age";
+    yaxis grid label="taux de sinistralité";
+	series x=ageFormat y =ts / lineattrs=(color='darkblue');
+run;
+ 
+
+*Ce code en dessous permet d'etudier la relation entre le taux de sinistralité 
+et le sexe du conducteurs;
+
+proc sgplot data=chrt.prod_sin_ts;
+title "Taux de sinistralité vs Age du conducteur par sexe";
+scatter x=ageFormat y=ts /group=sexe filledoutlinedmarkers 
+    
+    markeroutlineattrs=(color='black' thickness=2)
+    markerattrs=(symbol=circlefilled size=15);
+xaxis grid label="Age";
+yaxis grid label="Taux de sinistralité";
+series x=ageFormat y=ts / group=sexe
+    
+    
+    lineattrs=(thickness=2);
+    
+run;
+
+
+*************Construction du modèle************;
+
+/* 1- Modèle de poisson */
+
+data chrt.prod_sin;
+set chrt.prod_sin;
+offset=log(exposition);
+run;
+
+
+
+ods trace on;
+proc genmod data = chrt.prod_sin;
+	class  sexe ;
+	model nbr_sinistre= sexe age_du_conducteur age_mise_en_circulation / 
+	dist=poisson link=log offset=offset;
+	ods output modelfit=fit;
+	output out = chrt.prod_sin p = pred_nb_sinistre;
+run;
+ods trace off;
+data fit;
+	set fit;
+	pval=1-cdf("chisq", value,df);
+run;
+/* modele de binomial negative  */
+
+proc genmod data=chrt.prod_sin;
+	class sexe ; 
+    model nbr_sinistre =sexe age_du_conducteur age_mise_en_circulation / 
+        dist= negbin link=log offset=offset scale=0 noscale;
+    ods output info;
+run;
+/* Model ZIP */
+
+proc genmod data = chrt.prod_sin;
+	class  sexe ;
+	model nbr_sinistre= sexe age_du_conducteur age_mise_en_circulation / 
+	dist=zip link=log offset=offset;
+	zeromodel /link=logit;
+	ods output modelfit=fit;
+run;
+
+data fit;
+	set fit;
+	pval=1-cdf("chisq", value,df);
+run;
+/* Model ZINB */
+
+proc genmod data = chrt.prod_sin;
+	class  sexe ;
+	model nbr_sinistre= sexe age_du_conducteur age_mise_en_circulation / 
+	dist=zinb link=log offset=offset;
+	zeromodel / link=logit;
+	ods output modelfit=fit;
+run;
+
+data fit;
+	set fit;
+	pval=1-cdf("chisq", value,df);
+run;
+
+proc sql;
+create table chrt.prod_sin as
+select *, totalmontant/nbr_sinistre as CM
+from chrt.prod_sin;
+quit;
+
+
+proc sgplot data=chrt.prod_sin;
+vbar zone / response=CM groupdisplay=stack;
+run;
+
+
+
+*-----------------------------;
+/* delete var1 */
+data chrt.prod_sin;          
+set chrt.prod_sin(drop=var1); 
+run;
+/* supprimer les valeurs manquantes */
+proc sql;
+update chrt.prod_sin
+set CM=0
+where CM =. ;
+quit;
+proc genmod data=chrt.prod_sin ;
+class sexe comubsution;   
+model CM= sexe comubsution age_mise_en_circulation age_du_conducteur/ 
+dist =gamma link=log offset = offset ;
+title'Ajustement par loi de GAMMA';
+ods output modelfit=Gam;
+run;
+
+
+data Gam;
+pval=1-cdf("chisq", value, df);
+run;
+
+
+
+/* calcul frequence */
+proc genmod data = chrt.prod_sin;
+	class  sexe ;
+	model nbr_sinistre= sexe age_du_conducteur age_mise_en_circulation / 
+	dist=poisson link=log offset=offset;
+	ods output modelfit=fit;
+	output out = chrt.prod_sin p = pred_nb_sinistre;
+run;
+
+proc sql;
+	alter table chrt.prod_sin add pred_freq float(5);
+	update chrt.prod_sin set pred_freq = pred_nb_sinistre / exposition;
+quit; 
+
+/* calcul de sevirité */
+
+proc genmod data=chrt.prod_sin;
+Class sexe;
+Model CM = sexe  age_du_conducteur age_mise_en_circulation /
+dist = gamma link = log offset=offset ;
+ods output modelfit = Gamma;
+output out=chrt.prod_sin p=pred_cm; 
+run;
+
+/* calcul de prime */
+proc sql;
+alter table chrt.prod_sin add prime float(3);
+update chrt.prod_sin set prime = pred_cm*pred_freq;
+quit;
+
+proc print data=chrt.prod_sin (obs=6);
+run;
+*------------------------------------------------------------;
+
+data chrt.prod_sin_ln;
+set chrt.prod_sin;
+loga=log(CM);
+run;
+
+proc genmod data=chrt.prod_sin_ln;
+class sexe ;
+model loga=sexe age_du_conducteur age_mise_en_circulation /
+dist=normal link=id;
+title'Ajutement par lognormal';
+ods output modelfit=logn;
+output out=chrt.prod_sin p=pred_loga;
+run;
+
+
+proc sql;
+alter table chrt.prod_sin add prime float(3);
+update chrt.prod_sin set prime = exp(pred_loga)*pred_freq;
+quit;
+proc print data =chrt.prod_sin (obs=6);
+run;
+
+**************************************************************
+Code R                                                       *
+**************************************************************
+---
+title: "provions"
+author: "CHARET Mohamed"
+date: '2023-04-19'
+output: pdf_document
+---
+
+
+```{r}
+library(readxl)
+library(pander)
+provisions=read_excel("provisions.xlsx")
+provisions
+```
+```{r}
+#Cumulative Loss
+prov=provisions[,-1]
+for (i in 2:10) {
+  prov[, i] = prov[, i] + prov[, i - 1]
+}
+
+# ChainLadder
+LAMBDA = rep(NA, 10 - 1)
+for (k in 1:(10 - 1)) {
+  LAMBDA[k] = (sum(prov[1:(10 - k), k + 1]) / sum(prov[1:(10 - k), k]))
+}
+
+TRIANGLE = prov
+for (i in 1:(10 - 1)) {
+  TRIANGLE[(10 - i + 1):10, i + 1] = LAMBDA[i] * TRIANGLE[(10 - i + 1):(10), i]
+}
+
+TRIANGLE
+triangle = as.data.frame(TRIANGLE)
+tt = as.matrix(TRIANGLE)
+chargeultime = TRIANGLE[, 10]
+paiments = diag(tt[.10:1])
+reserve = chargeultime - paiments
+
+```
+```{r}
+
+# Charger la bibliothèque chainladder
+library('ChainLadder')
+
+# Ajuster le modèle de Mack à partir des données de prov
+M <- MackChainLadder(prov, est.sigma="Mack")
+
+# Afficher les résultats par triangle et totaux
+pander(summary(M)$By, style="grid")
+pander(summary(M)$Totals, style="grid")
+```
+```{r}
+
+#modele de GLM
+pp=as.data.frame(prov)
+ligne=rep(1:10,10)
+colone=rep(1:10,each=10)
+Y=c(pp[,1],pp[,2],pp[,3],pp[,4],pp[,5],pp[,6],pp[,7],pp[,8],pp[,9],pp[,10])
+
+lig=as.factor(ligne)
+col=as.factor(colone)
+cbind(Y,lig,col)
+
+# log normal
+reg=lm(log(Y)~lig+col)
+summary(reg)
+
+z=predict(reg, newdata=data.frame(lig,col),type="response")
+sigma=summary(reg)$sigma
+pred=exp(z+sigma^2/2)
+
+#Gamma
+regamma=glm(Y~lig+col,family=Gamma(link="log"))
+summary(regamma)
+x <- predict(regamma, newdata = data.frame(lig, col), type = "response")
+head(x,n=5)
+```
+```{r}
+sum(x[is.na(Y)==TRUE])
+
+```
+
+
